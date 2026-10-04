@@ -1,58 +1,91 @@
 package com.example.shieldbreaker;
 
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.enchantment.Enchantments;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.util.ActionResult;
 
 /**
- * Left click on a shielding player:
- *   1. switch to an axe from the hotbar
- *   2. the click's hit lands with the axe (breaks the shield)
- *   3. immediately after, switch to the mace and stay on it
- * The mace is never used for that click, and there is no switch back to the old slot.
+ * Dark's Optimizer – hotbar helpers for left clicks on players.
+ *
+ * 1) Target is shielding: axe selected -> axe hit -> mace selected, stay on mace.
+ * 2) Holding any sword and you have a mace with Breach in the hotbar:
+ *    the hit is sent with the Breach mace (attribute swap), then the sword is
+ *    selected again straight away, all inside the same click.
  */
 public class ShieldBreakerClient implements ClientModInitializer {
 	private static final int NONE = -1;
-	private static int pendingMaceSlot = NONE;
+	private static boolean busy = false;
 
 	@Override
 	public void onInitializeClient() {
-		// Fires on the client at the start of PlayerInteractionManager.attackEntity,
-		// i.e. BEFORE the held slot is synced to the server and the attack packet is sent.
-		// So changing the slot here makes the server see: select axe -> attack.
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+			if (busy) return ActionResult.PASS;
 			if (!world.isClient()) return ActionResult.PASS;
 			if (!(entity instanceof PlayerEntity target)) return ActionResult.PASS;
-			if (!target.isBlocking()) return ActionResult.PASS;
+
+			MinecraftClient client = MinecraftClient.getInstance();
+			if (client.interactionManager == null || client.getNetworkHandler() == null) {
+				return ActionResult.PASS;
+			}
 
 			PlayerInventory inv = player.getInventory();
 			int axeSlot = NONE;
 			int maceSlot = NONE;
+			int breachMaceSlot = NONE;
 			for (int i = 0; i < 9; i++) {
 				ItemStack stack = inv.getStack(i);
 				if (axeSlot == NONE && stack.isIn(ItemTags.AXES)) axeSlot = i;
-				if (maceSlot == NONE && stack.isOf(Items.MACE)) maceSlot = i;
+				if (stack.isOf(Items.MACE)) {
+					if (maceSlot == NONE) maceSlot = i;
+					if (breachMaceSlot == NONE && hasBreach(stack)) breachMaceSlot = i;
+				}
 			}
-			if (axeSlot == NONE || maceSlot == NONE) return ActionResult.PASS;
 
-			inv.setSelectedSlot(axeSlot);   // 1. auto switch to axe (the hit goes out with it)
-			pendingMaceSlot = maceSlot;     // 3. switch to mace right after the hit
-			return ActionResult.PASS;       // let the normal attack continue
-		});
-
-		// End of the same tick: the axe hit has already been sent, so go to the mace and stay.
-		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			if (pendingMaceSlot == NONE) return;
-			if (client.player != null) {
-				client.player.getInventory().setSelectedSlot(pendingMaceSlot);
+			// 1) shield break combo: axe hit, then stay on the mace
+			if (target.isBlocking() && axeSlot != NONE && maceSlot != NONE) {
+				busy = true;
+				try {
+					inv.setSelectedSlot(axeSlot);
+					client.interactionManager.attackEntity(player, entity);
+				} finally {
+					busy = false;
+				}
+				inv.setSelectedSlot(maceSlot);
+				// tell the server right away, in the same tick as the axe hit
+				client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(maceSlot));
+				return ActionResult.FAIL; // click already handled
 			}
-			pendingMaceSlot = NONE;
+
+			// 2) sword -> Breach mace attribute swap, then back to the sword
+			if (player.getMainHandStack().isIn(ItemTags.SWORDS) && breachMaceSlot != NONE) {
+				int swordSlot = inv.getSelectedSlot();
+				busy = true;
+				try {
+					inv.setSelectedSlot(breachMaceSlot);
+					client.interactionManager.attackEntity(player, entity); // slot packet + attack packet
+				} finally {
+					busy = false;
+				}
+				inv.setSelectedSlot(swordSlot);
+				// tell the server right away, in the same tick as the attack
+				client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(swordSlot));
+				return ActionResult.FAIL; // click already handled
+			}
+
+			return ActionResult.PASS;
 		});
+	}
+
+	private static boolean hasBreach(ItemStack stack) {
+		return stack.getEnchantments().getEnchantments().stream()
+				.anyMatch(entry -> entry.matchesKey(Enchantments.BREACH));
 	}
 }
