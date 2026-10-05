@@ -15,7 +15,8 @@ import net.minecraft.util.ActionResult;
 /**
  * Dark's Optimizer – hotbar helpers for left clicks on players.
  *
- * 1) Target is shielding: axe selected -> axe hit -> mace selected, stay on mace.
+ * 1) You hold an AXE and click a shielding player: axe hit -> mace selected, stay on mace.
+ *    (Does nothing if you hold anything other than an axe.)
  * 2) Holding any sword and you have a mace with Breach in the hotbar:
  *    the hit is sent with the Breach mace (attribute swap), then the sword is
  *    selected again straight away, all inside the same click.
@@ -62,7 +63,10 @@ public class ShieldBreakerClient implements ClientModInitializer {
 					&& now - lastComboTick >= 0 && now - lastComboTick < COMBO_LOCKOUT_TICKS;
 
 			// 1) shield break combo: axe hit, then stay on the mace
-			if (!justBroke && target.isBlocking() && axeSlot != NONE && maceSlot != NONE) {
+			// Only when you are already HOLDING an axe; nothing else triggers it.
+			boolean holdingAxe = player.getMainHandStack().isIn(ItemTags.AXES);
+			if (holdingAxe) axeSlot = inv.getSelectedSlot(); // use the axe in your hand
+			if (holdingAxe && !justBroke && target.isBlocking() && maceSlot != NONE) {
 				lastComboTarget = target.getUuid();
 				lastComboTick = now;
 				busy = true;
