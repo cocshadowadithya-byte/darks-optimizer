@@ -24,6 +24,11 @@ public class ShieldBreakerClient implements ClientModInitializer {
 	private static final int NONE = -1;
 	private static boolean busy = false;
 
+	// 10 ticks = 0.5 s
+	private static final long COMBO_LOCKOUT_TICKS = 10;
+	private static java.util.UUID lastComboTarget = null;
+	private static long lastComboTick = -1000;
+
 	@Override
 	public void onInitializeClient() {
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
@@ -49,8 +54,17 @@ public class ShieldBreakerClient implements ClientModInitializer {
 				}
 			}
 
+			// Right after a shield break, the target's shield state is still "blocking" on our
+			// screen for a few ticks. Don't run the combo again on the same player in that
+			// window, so the next click is a normal hit with the mace we're now holding.
+			long now = world.getTime();
+			boolean justBroke = target.getUuid().equals(lastComboTarget)
+					&& now - lastComboTick >= 0 && now - lastComboTick < COMBO_LOCKOUT_TICKS;
+
 			// 1) shield break combo: axe hit, then stay on the mace
-			if (target.isBlocking() && axeSlot != NONE && maceSlot != NONE) {
+			if (!justBroke && target.isBlocking() && axeSlot != NONE && maceSlot != NONE) {
+				lastComboTarget = target.getUuid();
+				lastComboTick = now;
 				busy = true;
 				try {
 					inv.setSelectedSlot(axeSlot);
