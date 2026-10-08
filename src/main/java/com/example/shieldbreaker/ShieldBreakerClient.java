@@ -1,6 +1,7 @@
 package com.example.shieldbreaker;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.enchantment.Enchantments;
@@ -30,8 +31,27 @@ public class ShieldBreakerClient implements ClientModInitializer {
 	private static java.util.UUID lastComboTarget = null;
 	private static long lastComboTick = -1000;
 
+	// Ticks to wait after the axe hit before switching to the mace (20 ticks = 1 s).
+	// 1 = next tick, 2 = about 0.1 s, 3 = about 0.15 s ... change this number to tune it.
+	private static final int MACE_SWITCH_DELAY_TICKS = 3;
+	private static int pendingMaceSlot = NONE;
+	private static int pendingTicks = 0;
+
 	@Override
 	public void onInitializeClient() {
+		// Delayed switch to the mace after a shield break
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			if (pendingMaceSlot == NONE) return;
+			if (client.player == null) {
+				pendingMaceSlot = NONE;
+				return;
+			}
+			if (--pendingTicks <= 0) {
+				client.player.getInventory().setSelectedSlot(pendingMaceSlot);
+				pendingMaceSlot = NONE;
+			}
+		});
+
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
 			if (busy) return ActionResult.PASS;
 			if (!world.isClient()) return ActionResult.PASS;
@@ -76,9 +96,9 @@ public class ShieldBreakerClient implements ClientModInitializer {
 				} finally {
 					busy = false;
 				}
-				inv.setSelectedSlot(maceSlot);
-				// tell the server right away, in the same tick as the axe hit
-				client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(maceSlot));
+				// switch to the mace a few ticks AFTER the axe hit (see tick handler below)
+				pendingMaceSlot = maceSlot;
+				pendingTicks = MACE_SWITCH_DELAY_TICKS;
 				return ActionResult.FAIL; // click already handled
 			}
 
