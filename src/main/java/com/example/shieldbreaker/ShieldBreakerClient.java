@@ -1,4 +1,4 @@
-package com.example.shieldbreaker;
+=package com.example.shieldbreaker;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
